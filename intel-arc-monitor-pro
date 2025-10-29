@@ -1,7 +1,35 @@
 #!/usr/bin/env bash
+# ==========================================================
+# Intel Arc GPU Power & Frequency Monitor (Pro Edition)
+# Version: 1.2 (2025-10)
+# Author: ChatGPT (OpenAI)
+# License: MIT
+#
+# Description:
+#   A lightweight, safe, and extensible telemetry viewer for
+#   Intel Arc GPUs using sysfs interfaces. Designed for both
+#   live monitoring and logging with minimal CPU overhead.
+#
+# Usage:
+#   sudo ./intel-arc-monitor-pro.sh [options]
+#
+# Options:
+#   --interval <secs>   Refresh rate (default: 0.5)
+#   --log <file>        Append readings to a log file
+#   --color             Enable colored output (green/amber/red)
+#   -h | --help         Display this help
+#
+# Examples:
+#   sudo ./intel-arc-monitor-pro.sh
+#   sudo ./intel-arc-monitor-pro.sh --interval 1 --log /tmp/arc.log
+#   sudo ./intel-arc-monitor-pro.sh --color
+#
+# ==========================================================
+
 set -euo pipefail
 IFS=$'\n\t'
 
+# --- Default settings ---
 INTERVAL=0.5
 LOG_MODE=false
 LOG_FILE=""
@@ -68,31 +96,51 @@ if [[ ${#GT_LIST[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# --- Prepare logging ---
+if $LOG_MODE; then
+    echo "📝 Logging enabled → $LOG_FILE"
+    echo "# Timestamp Power(W) Voltage(mV) ActFreq(MHz)" > "$LOG_FILE"
+fi
+
 # --- Setup terminal and cleanup trap ---
 tput civis || true
 cleanup() { tput cnorm 2>/dev/null || true; echo; exit 0; }
 trap cleanup INT TERM
 
+# --- Optional color formatting ---
+colorize() {
+    local value="$1" color="$2"
+    if $USE_COLOR; then
+        case "$color" in
+            red) printf "\033[1;31m%s\033[0m" "$value" ;;
+            yellow) printf "\033[1;33m%s\033[0m" "$value" ;;
+            green) printf "\033[1;32m%s\033[0m" "$value" ;;
+            *) printf "%s" "$value" ;;
+        esac
+    else
+        printf "%s" "$value"
+    fi
+}
+
 # --- Main loop ---
 while :; do
-    # Read Power and Frequency
-    POWER1=$(read_sysfs "$HWMON_BASE/energy1_input")
+    read -r P1 < "$HWMON_BASE/energy1_input"
     sleep "$INTERVAL"
-    POWER2=$(read_sysfs "$HWMON_BASE/energy1_input")
-
-    # Raw energy difference (no scaling)
-    RAW_POWER=$(( POWER2 - POWER1 ))
-
-    # Test with a new scaling factor (500000 for more accurate power)
-    SCALING_FACTOR=500000  # Adjusting scaling factor
+    read -r P2 < "$HWMON_BASE/energy1_input"
+    
+    # Power calculation with updated scaling factor to improve accuracy
+    RAW_POWER=$(( P2 - P1 ))
+    SCALING_FACTOR=500000  # Adjusted scaling factor for proper idle reading
     POWER=$(( RAW_POWER / SCALING_FACTOR ))
 
-    # Debug output for new scaling factor
-    echo "Raw energy difference (no scaling): $RAW_POWER"
-    echo "Power with scaling factor $SCALING_FACTOR: $POWER Watts"
-
-    # Read Voltage and Frequency info
     VOLTAGE=$(read_sysfs "$HWMON_BASE/in0_input")
+    POWER_LIMIT_RAW=$(read_sysfs "$HWMON_BASE/power1_max")
+    if [[ "$POWER_LIMIT_RAW" =~ ^[0-9]+$ ]]; then
+        POWER_LIMIT=$(( POWER_LIMIT_RAW / 1000000 ))
+    else
+        POWER_LIMIT="N/A"
+    fi
+
     ACT_FREQ=$(read_sysfs "${GT_LIST[0]}/rps_act_freq_mhz")
     THROTTLE_STATUS=$(read_sysfs "${GT_LIST[0]}/throttle_reason_status")
 
@@ -114,6 +162,8 @@ while :; do
     echo "Power Usage: ${POWER_STR} Watts"
     echo "Voltage: $VOLTAGE mV"
     echo "RPS ACT Freq: $ACT_FREQ MHz"
+    echo "Power Limit: $POWER_LIMIT Watts"
+    echo "Throttle Status: $THROTTLE_STATUS"
     echo
     echo "============================="
 
