@@ -122,11 +122,19 @@ colorize() {
 
 # --- Main monitoring loop ---
 while :; do
+    # Read raw energy values and calculate power
     read -r P1 < "$HWMON_BASE/energy1_input"
     sleep "$INTERVAL"
     read -r P2 < "$HWMON_BASE/energy1_input"
-    POWER=$(( (P2 - P1) / 252525 ))
+    
+    # Raw energy difference (no scaling)
+    RAW_POWER=$(( P2 - P1 ))
 
+    # Use a better scaling factor (500000) for power calculation
+    SCALING_FACTOR=500000
+    POWER=$(( RAW_POWER / SCALING_FACTOR ))
+
+    # Read Voltage and Frequency info
     VOLTAGE=$(read_sysfs "$HWMON_BASE/in0_input")
     POWER_LIMIT_RAW=$(read_sysfs "$HWMON_BASE/power1_max")
     if [[ "$POWER_LIMIT_RAW" =~ ^[0-9]+$ ]]; then
